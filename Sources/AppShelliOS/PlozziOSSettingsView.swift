@@ -2490,6 +2490,7 @@ struct PlozziOSPlaybackSettingsView: View {
                 .settingsSearchAnchor("read-ahead")
             LivePlaybackBufferControl()
                 .settingsSearchAnchor("live-buffer")
+            DefaultVideoZoomControl(model: model)
             if UIDevice.current.userInterfaceIdiom == .phone {
                 SettingsSectionGroup {
                     Picker("Player orientation", selection: $model.settings.orientation) {

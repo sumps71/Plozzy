@@ -12,6 +12,15 @@ system green appearance instead of inheriting the page's monochrome navigation t
 
 The Settings screen and its detail pages. Profile-aware and integration-aware.
 
+Playback's **Default zoom** uses the shared native menu on TV and mobile.
+Each profile stores separate iPhone, iPad and Apple TV choices; the current platform's
+control edits only its own choice. Custom exposes the existing 50-200% range.
+Saved movie/series mode overrides take priority. Auto-crop's pinch-selected
+screen-edge/cutout-safe framing instead carries across all videos for that device
+type and profile. Changing Custom's percentage preserves that shared framing.
+The playback settings payload carries all three defaults through profile switching,
+transfer and sync.
+
 Live TV's **Clean channel names** switch is profile-scoped and off by default.
 The shared TV/mobile section previews up to three distinct original names from
 the authorized loaded IPTV catalog, preferring names affected by cleanup.
@@ -1163,6 +1172,9 @@ watch history and planning-list behavior are documented in
   directional movement, without resizing or sliding across the screen.
   Back from a category restores its selected row and retained scroll position;
   Back from a child returns one page. Playback initially owns focus, not a second pane.
+  Home's Edit shortcut opens Home directly but remembers Screens & Navigation
+  as its root category, so returning leaves a real enabled row to focus rather
+  than gating every category behind a subpage-only route.
   The remembered category only restores navigation: native focus owns the row's
   highlight and selected accessibility trait. Moving to profile actions, credits,
   or any other root control must not leave an inactive category highlighted.
