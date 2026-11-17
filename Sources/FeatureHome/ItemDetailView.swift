@@ -823,6 +823,7 @@ public struct ItemDetailView: View {
                     // A movie on Continue Watching offers Remove from Continue
                     // Watching on its own page.
                     .mediaItemActionContext(viewModel.isInContinueWatching ? .continueWatching : .none)
+                    .environment(\.plozzArtworkSourceReady, viewModel.artworkSourceIsReady)
                     .id(Self.topAnchorID)
                     if !detail.children.isEmpty {
                         MediaRowView(

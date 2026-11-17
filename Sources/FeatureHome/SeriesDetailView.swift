@@ -506,6 +506,7 @@ struct SeriesDetailView: View {
                     // Continue Watching, Next Up or Upcoming — the rows a drop
                     // removes it from. (Undrop is offered whenever it is dropped.)
                     .mediaItemActionContext(.showDetail(onDroppableRow: viewModel.isOnDroppableRow))
+                    .environment(\.plozzArtworkSourceReady, viewModel.artworkSourceIsReady)
                     .id(Self.topAnchorID)
                     // Draws above the episode rail below it, so an icon's hint
                     // bubble is not covered by the cards it overlaps.
