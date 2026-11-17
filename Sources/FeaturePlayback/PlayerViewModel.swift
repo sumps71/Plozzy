@@ -2110,7 +2110,8 @@ public final class PlayerViewModel {
         #if canImport(UIKit)
         if let zoom = outcome.importedVideoZoom {
             controls.videoZoom.restoreForPlayback(
-                zoom, automaticDefault: true, supportsActivePicture: engine.supportsActivePictureAnalysis
+                zoom, defaultPreference: playbackSettings.videoZoom[.current],
+                supportsActivePicture: engine.supportsActivePictureAnalysis
             )
         }
         #endif
@@ -2123,7 +2124,8 @@ public final class PlayerViewModel {
         let remembered = eligible
             ? manuallySelectedVideoZoom ?? seriesMemory.rememberedVideoZoom(for: request.item) : nil
         controls.videoZoom.restoreForPlayback(
-            remembered, automaticDefault: eligible,
+            remembered, defaultPreference: request.usesUnidentifiedDiscTimeline
+                ? PlayerVideoZoom() : playbackSettings.videoZoom[.current],
             supportsActivePicture: engine.supportsActivePictureAnalysis
         )
     }
