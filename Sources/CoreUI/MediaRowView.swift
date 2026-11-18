@@ -268,6 +268,7 @@ public struct MediaRowView: View {
     /// marks sequels/spin-offs as "Continues"). The row owns card construction,
     /// so callers need this seam rather than rebuilding the whole rail.
     private let statusCue: ((MediaItem) -> Text?)?
+    private let statusCueDetail: ((MediaItem) -> String?)?
     /// Cards retained by a stale Watchlist row after their removal was accepted.
     private let pendingRemovalIDs: Set<String>
     /// Stable lookup tables so focus/prefetch hot paths avoid repeated linear scans.
@@ -347,6 +348,7 @@ public struct MediaRowView: View {
         onItemExposed: ((MediaItem) -> Void)? = nil,
         isExposureActive: Bool = true,
         statusCue: ((MediaItem) -> Text?)? = nil,
+        statusCueDetail: ((MediaItem) -> String?)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
         reservesLoadingFocus: Bool = false,
@@ -379,6 +381,7 @@ public struct MediaRowView: View {
             onItemExposed: onItemExposed,
             isExposureActive: isExposureActive,
             statusCue: statusCue,
+            statusCueDetail: statusCueDetail,
             pendingRemovalIDs: pendingRemovalIDs,
             loadingPlaceholderCount: loadingPlaceholderCount,
             reservesLoadingFocus: reservesLoadingFocus,
@@ -413,6 +416,7 @@ public struct MediaRowView: View {
         onItemExposed: ((MediaItem) -> Void)? = nil,
         isExposureActive: Bool = true,
         statusCue: ((MediaItem) -> Text?)? = nil,
+        statusCueDetail: ((MediaItem) -> String?)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
         reservesLoadingFocus: Bool = false,
@@ -461,6 +465,7 @@ public struct MediaRowView: View {
         self.onItemExposed = onItemExposed
         self.isExposureActive = isExposureActive
         self.statusCue = statusCue
+        self.statusCueDetail = statusCueDetail
         self.pendingRemovalIDs = pendingRemovalIDs
         self.playsOnSelect = playsOnSelect
         self.showsResumeChip = showsResumeChip
@@ -1011,6 +1016,12 @@ public struct MediaRowView: View {
         #endif
     }
 
+    private func combinedStatusCue(for item: MediaItem) -> Text? {
+        guard let cue = statusCue?(item) else { return nil }
+        guard let detail = statusCueDetail?(item) else { return cue }
+        return cue + Text(verbatim: " · ") + Text(verbatim: detail)
+    }
+
     @ViewBuilder
     private func card(for item: MediaItem) -> some View {
         switch presentation {
@@ -1022,7 +1033,7 @@ public struct MediaRowView: View {
                     artworkPolicy: artworkPolicy,
                     spoilerSettings: spoilerSettings,
                     showsSeriesArtwork: showsSeriesArtwork,
-                    statusCue: statusCue?(item),
+                    statusCue: combinedStatusCue(for: item),
                     playsOnSelect: playsOnSelect,
                     showsResumeChip: showsResumeChip,
                     isPendingRemoval: pendingRemovalIDs.contains(
@@ -1041,7 +1052,7 @@ public struct MediaRowView: View {
                     artworkPolicy: artworkPolicy,
                     spoilerSettings: spoilerSettings,
                     showsSeriesArtwork: showsSeriesArtwork,
-                    statusCue: statusCue?(item),
+                    statusCue: combinedStatusCue(for: item),
                     playsOnSelect: playsOnSelect,
                     showsResumeChip: showsResumeChip,
                     isPendingRemoval: pendingRemovalIDs.contains(

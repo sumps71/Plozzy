@@ -694,6 +694,11 @@
                         else { return nil }
                         return statusCue(for: release)
                     },
+                    statusCueDetail: { item in
+                        releases.first(where: {
+                            $0.item.stablePresentationID == item.stablePresentationID
+                        })?.seasonEpisodeLabel
+                    },
                     onSelect: { navigate?($0) }
                 )
                 .browsingRow(onSeeAll)
@@ -701,6 +706,7 @@
                 .environment(\.plozzArtworkArea, .continueWatching)
                 .environment(\.plozzLandscapeTitleLogo, usesTitleLogo ? .on : .off)
                 .environment(\.plozzTitleLogoBackdrop, usesTitleLogo)
+                .environment(\.mediaCardStatusCuePlacement, .topLeadingLarge)
                 // Upcoming titles aren't in the library, so their art is always online.
                 .transformEnvironment(\.plozzArtworkSettings) { $0.setOverride(.online, for: .continueWatching) }
                 .mediaItemActionContext(.upcoming)

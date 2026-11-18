@@ -73,6 +73,16 @@ public struct UpcomingRelease: Identifiable, Equatable, Codable, Sendable {
         return "New episode"
     }
 
+    /// Compact season/episode identity for an upcoming episode banner.
+    /// Absolute numbering stays unconverted because it has no reliable season.
+    public var seasonEpisodeLabel: String? {
+        guard kind == .episode,
+              let episode = episodes.first,
+              let season = episode.seasonNumber,
+              let number = episode.episodeNumber else { return nil }
+        return "S\(season) E\(number)"
+    }
+
     public var posterSubtitle: LocalizedStringResource? {
         guard kind == .episode, let season = episodes.first?.seasonNumber else { return subtitle }
         if episodes.count > 1 {

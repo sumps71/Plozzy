@@ -3,6 +3,38 @@ import SwiftUI
 import CoreModels
 import MetadataKit
 
+/// Placement for an optional context cue shown over card artwork.
+public enum MediaCardStatusCuePlacement: Equatable, Sendable {
+    case topLeading
+    case topLeadingLarge
+    case bottomCentered
+
+    fileprivate var alignment: Alignment {
+        switch self {
+        case .topLeading, .topLeadingLarge: .topLeading
+        case .bottomCentered: .bottom
+        }
+    }
+
+    fileprivate var extraBottomInset: CGFloat {
+        switch self {
+        case .topLeading, .topLeadingLarge: 0
+        case .bottomCentered: 40
+        }
+    }
+}
+
+private struct MediaCardStatusCuePlacementKey: EnvironmentKey {
+    static let defaultValue = MediaCardStatusCuePlacement.topLeading
+}
+
+public extension EnvironmentValues {
+    var mediaCardStatusCuePlacement: MediaCardStatusCuePlacement {
+        get { self[MediaCardStatusCuePlacementKey.self] }
+        set { self[MediaCardStatusCuePlacementKey.self] = newValue }
+    }
+}
+
 /// A focusable poster/landscape card for a `MediaItem`, with artwork, a watched
 /// progress bar, and title/subtitle. The standard building block of Home rows
 /// and library grids.
@@ -91,6 +123,7 @@ public struct PosterCardView: View {
     @Environment(\.plozzContinueWatchingPlaybackDetails) private var playbackDetails
     @Environment(\.plozzLandscapeTitleLogo) private var landscapeTitleLogo
     @Environment(\.plozzTitleLogoBackdrop) private var titleLogoBackdrop
+    @Environment(\.mediaCardStatusCuePlacement) private var statusCuePlacement
 
     private var usesLandscapeTitleLogo: Bool {
         landscapeTitleLogo == .on && (!showsSeriesArtwork || titleLogoBackdrop)
@@ -445,7 +478,7 @@ public struct PosterCardView: View {
             if showsResumeChip { resumeChipOverlay.withoutScrim }
             pendingRemovalOverlay
         }
-        .overlay(alignment: .topLeading) { statusCue(inset: borderlessBadgeInset) }
+        .overlay(alignment: statusCuePlacement.alignment) { statusCue(inset: borderlessBadgeInset) }
     }
 
     private var nativePlaybackIndicators: MediaCardPlaybackIndicators {
@@ -471,7 +504,7 @@ public struct PosterCardView: View {
     ) -> some View {
         Color.clear
             .overlay { artwork }
-            .overlay(alignment: .topLeading) { statusCue(inset: badgeInset) }
+            .overlay(alignment: statusCuePlacement.alignment) { statusCue(inset: badgeInset) }
             .overlay {
                 if showsIndicators {
                     MediaCardPlaybackIndicators(
@@ -658,7 +691,7 @@ public struct PosterCardView: View {
             .aspectRatio(borderlessAspectRatio, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .overlay { artwork }
-            .overlay(alignment: .topLeading) { statusCue(inset: borderlessBadgeInset) }
+            .overlay(alignment: statusCuePlacement.alignment) { statusCue(inset: borderlessBadgeInset) }
             .overlay {
                 MediaCardPlaybackIndicators(
                     item: item,
@@ -1390,15 +1423,24 @@ public struct PosterCardView: View {
     @ViewBuilder
     private func statusCue(inset: CGFloat) -> some View {
         if let statusCueText {
-            statusCueText
-                .font(.system(size: metrics.cardStatusCueFontSize, weight: .semibold))
+            let cueFontSize = statusCuePlacement == .topLeading
+                ? metrics.cardStatusCueFontSize : metrics.resumeChipFontSize
+            let content = statusCueText
+                .font(.system(size: cueFontSize, weight: .semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .padding(.horizontal, metrics.cardStatusCueHorizontalPadding)
                 .padding(.vertical, metrics.cardStatusCueVerticalPadding)
                 .background(.black.opacity(0.72), in: Capsule(style: .continuous))
-                .padding(inset)
                 .accessibilityLabel(statusCueText)
+            switch statusCuePlacement {
+            case .topLeading, .topLeadingLarge:
+                content.padding(inset)
+            case .bottomCentered:
+                content
+                    .padding(.horizontal, inset)
+                    .padding(.bottom, inset + statusCuePlacement.extraBottomInset)
+            }
         }
     }
 
