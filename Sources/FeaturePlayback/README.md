@@ -92,6 +92,9 @@ Back, the control and Reset remain vertically reachable. On submenu entry,
 Back and Reset become eligible only after the stepper reports actual native
 focus; writing the panel's row FocusState does not focus a separately hosted
 stepper. This entry gate resets on reopening, not on ordinary Up/Down movement.
+Reset clears the offset and explicitly returns focus to the stepper's own
+button. Disabling Reset at zero does not itself move tvOS focus; the next Up
+from the stepper must reach Back.
 
 Automatic on-demand subtitle selection applies the profile's **SDH subtitles**
 preference to embedded tracks and external files, including network shares and
@@ -564,14 +567,12 @@ processing for every engine route. Undocumented integration carries OS
 compatibility and App Review risk. This system-preference bridge is tvOS-only.
 
 On iPhone and iPad, VOD and Live TV share adaptive native `PlayerMoreMenuButton`
-controls. Portrait uses one ellipsis; landscape exposes the available menus as
-separate controls, with Version and Multiview opening their existing destinations
-directly. Audio, Subtitles and Video reuse the existing player-category icons
-(waveform, captions and adjustment sliders) in both VOD and Live TV. Video combines
-zoom choices with Quality in both layouts; Quality opens its existing editor and
-never acts as a selectable zoom mode. The standalone Video popup omits its redundant
-category heading; portrait retains the named Video entry. Quality remains
-available in Video even when zoom is unsupported. Layout follows the actual player
+controls. Portrait uses one ellipsis. Landscape shows Audio, Subtitles, the
+current speed (on demand), and an ellipsis, omitting unavailable controls.
+Quality lists the server-supported presets and marks the current limit. Selecting
+a preset keeps the codec and other stream settings; Advanced opens the full editor
+for custom limits, transcoding and stream details. Version (on demand) or Multiview (live) also lives
+in overflow when available. Layout follows the actual player
 viewport, including iPad split windows, not the device's global orientation.
 Subtitles and Audio offer their existing tracks directly with real active-track
 checkmarks. Audio has no redundant track-section heading. Subtitles lists all
@@ -579,13 +580,13 @@ tracks first, then Search & Download, then Advanced. Native menu configurations
 preserve this top-to-bottom order even when opening upward. Advanced opens a touch sheet for supported
 appearance, timing and dual-track controls. Live TV
 does not offer search/download or dual subtitles. Native speed presets and Video
-modes apply immediately; Custom, Quality, Version and supported sync controls
+modes apply immediately; Custom Speed, Advanced Quality, Version and supported sync controls
 open their existing editors. Live multiview is another menu action; Go Live
 remains a transport action. A sole audio track stays visible as disabled metadata.
 Opening a menu pins transport controls; playback-clock updates do not rebuild
 its snapshot. `PlayerMenuPresentation` releases editor requests only after native
 menu dismissal completes. Context changes invalidate pending requests and old
-audio/subtitle/speed/zoom actions, and programme transitions release live controls.
+audio/subtitle/speed/quality/zoom actions, and programme transitions release live controls.
 Each native popup has its own presentation owner, so overlapping dismissal and
 teardown callbacks cannot unpin a newer popup or release a sheet too early.
 Popup rows are text-only: checkmarks belong to real track/mode/rate choices.
@@ -601,6 +602,51 @@ Native and tvOS track menus share `TrackLabeling` and `TrackMenuBuilder`.
 Bare language titles no longer suppress known codec/channel facts, for example
 `English (Opus 5.1)`. Custom names and commentary are retained, existing format
 facts are not duplicated, and unknown formats are not invented.
+Plex and Jellyfin/Emby keep original container track names separately from
+generated display titles. Audio, primary-subtitle, and secondary-subtitle menus
+retain names such as `Director Commentary`, `Full subs`, and `Signs & Songs`
+alongside the existing language/format label. Names are content, not translated
+app copy; empty/generic names keep the previous fallback. Matching provider
+names fill engine metadata gaps without replacing an explicit engine name.
+Plozzigen also retains names read directly from the container when the server
+omits them. Its generated language/codec and numbered fallback labels are not
+treated as authored names. Real-world metadata regression cases cover release
+groups, translation credits, regional/script variants, colored SDH and commentary;
+names never change automatic selection or forced-subtitle disposition.
+Colliding subtitle labels first expose known format differences, such as SRT,
+ASS or WebVTT. Codec aliases normalize to the same format, and missing/unknown
+formats are not invented. Labels still identical after that gain a localized
+track-number suffix. This applies to primary and secondary subtitles, including
+the native mobile menu; unique names,
+selection IDs, preferred-language ordering and external-subtitle markers are unchanged.
+This keeps the useful title/language/format distinction found in
+[Kodi](https://github.com/xbmc/xbmc/blob/master/xbmc/video/dialogs/GUIDialogSubtitleSettings.cpp)
+and [mpv](https://github.com/mpv-player/mpv/blob/master/player/lua/select.lua)
+without adding format noise to every subtitle row.
+Native subtitle renditions also reserve original names before numbering duplicates,
+so a title such as `English 2` cannot collide with a generated suffix.
+Source version tags are deduplicated only when actually shown in the label; conflicting
+source/display metadata is preserved, not interpreted as a correction or a language.
+Explicit audio-description flags from Plex, Plozzigen and native local audio
+selection appear as `Audio Description`, independently of commentary. Jellyfin/Emby
+titles remain intact; their current stream DTOs do not expose a separate equivalent
+flag, but direct Plozzigen demuxing retains the container disposition.
+MP4 stream `title`, `name` and custom `handler_name` values are resolved in the
+engine, not guessed in the app. Muxer defaults such as `SoundHandler` and
+`SubtitleHandler` retain generated fallback labels.
+
+`TrackMenuBuilderTests.testSampledServerMetadataHasDistinctLabelsAndStableSelections`
+accepts a private normalized corpus through `PLOZZ_TRACK_METADATA_CORPUS`; it
+checks audio and both subtitle menus in four locales without changing selection.
+The corpus must contain track metadata only, never tokens, server URLs, media paths
+or item identifiers. Do not commit personal-library samples or rendered output.
+The small `track-names.mp4`, `track-metadata-name.mp4`, `track-defaults.mp4`
+and `track-names.mkv` fixtures
+contain 0.2 seconds of generated silent AAC and the original cue
+`Track metadata fixture.` They verify actual demuxed names, default handlers and
+accessibility flags without downloading copyrighted media.
+`track-name-collisions.mp4` repeats the same original cue on three subtitle tracks
+to cover native rendition names that collide with numeric suffixes.
 Explicit French audio/subtitle version tags (`VFQ`, `VFF`, `VFI`, `VFB`, `VQ`, `VOF`,
 `VOQ`) survive generated server titles, matching-track provider enrichment, and
 app-locale changes. These are source-authored community conventions, rendered
@@ -706,9 +752,12 @@ without tint or a colored backing. Like AVKit video chrome, their symbols and
 progress remain white in both appearances. Mobile Live TV's top presentation
 group contains only available Picture in Picture and AirPlay controls, with no
 separate Stop button. Pause/resume, player dismissal, and session cleanup retain
-their existing behavior. Playback options, track selection, and multiview sit
+their existing behavior. When playback is behind live, a separate **Jump to live**
+button returns to the live edge and disappears. Scheduled channels use **Jump to
+now**. In landscape the button sits immediately before the playback menus.
+Playback options, track selection, and multiview sit
 at the bottom trailing edge above the timeline. Portrait keeps the title on its
-own row above those actions; track menus open upward without covering the seek
+own row above a single options menu; track menus open upward without covering the seek
 bar. The controls scrim dims the video
 beneath the transport as well as the edge chrome, so white scenes remain legible
 without coloring the glass itself. Mobile Info, Cast, and Live TV Info/On Now/Guide
@@ -763,7 +812,13 @@ badge during transient phases and while paused at the edge, retaining its
 localized layout space so the header and timeline do not shift.
 VOD and Live chrome use the larger of the
 window safe area and native edge margins (21 horizontal, 24 vertical), rather
-than adding the two. Adjacent
+than adding the two. When UIKit identifies a landscape corner occlusion on a
+phone with a one-sided safe inset, main and Live use the ordinary margin on
+unobstructed rows. Close moves inward when its corner is occupied. The timeline
+keeps both time labels aligned with the title and options; if its 44-point hit
+area meets a lower camera corner, it rises just enough to clear it. Video is not inset.
+Compact Live TV controls do not reserve fullscreen camera clearance.
+Without that geometry, the controls keep the conservative safe margins. Adjacent
 routing and playback-option controls share one untinted glass capsule while
 retaining independent actions. Grouped children have no individual glass
 backgrounds or circular clipping, including UIKit menu buttons; Close and the
@@ -1542,7 +1597,10 @@ artwork boundary through that same zoom/stretch geometry before moving a region.
 
 The profile's Default zoom is stored separately for iPhone, iPad and Apple TV.
 It applies to movies, episodes, extras, trailers and Live TV; each platform starts
-with Auto-crop black bars. Unsupported engines fall back to Normal without changing
+with Normal. Older saved Auto-crop defaults and title choices reset to Normal once;
+other modes, Custom percentages and cutout-safe preferences remain intact.
+New explicit Auto-crop choices survive reloads and profile transfer.
+Unsupported engines fall back to Normal without changing
 the saved choice. Unidentified disc-menu timelines retain Normal framing.
 An explicit zoom-mode choice, including Normal or a Custom percentage, is remembered
 per profile and movie/series using the existing title preference store. Auto-crop's
@@ -1847,6 +1905,28 @@ Rendering uses source time minus the subtitle offset. Paused frames redraw only 
 cue data; backward seeks rebuild the retained event set. Track changes, Off,
 native presentation and teardown fence late output. The existing overlay retains
 video-rect mapping, HDR brightness and control avoidance.
+
+`ASSSubtitleRendererTests` checks authored sign starts and ends at millisecond
+boundaries. A deterministic test feeds the real pacer, render-lead estimator
+and libass a virtual clock with 50 or 100 ms per render at 23.976 and 60 Hz.
+Each completed bitmap must match the cue at its delivery time; a previous
+bitmap may remain visible between completions. This models steady render
+cost, not a particular device, async driver scheduling or screen composition.
+Its opt-in `testLocalASSDriverBoundaryTiming` probe
+(`PLOZZ_ASS_TIMING_PROBE=1`) warms the rasterizer, then measures callback delivery
+for short original vector cues at simulated 23.976, 24 and 60 Hz tick cadences.
+It reports every boundary and rejects missing transitions; it is not a
+wall-clock latency gate. These measurements exclude video decoding, SwiftUI
+overlay composition, physical display latency and cold font initialization.
+Passing parser/rasterizer tests alone does not establish frame-accurate A/V sync;
+small reported offsets require the affected media and a rendered comparison.
+The app-hosted `NativeSubtitlePresentationTests.testLocalASSVideoBoundaryTiming`
+probe (`PLOZZ_ASS_VIDEO_TIMING_PROBE=1`) uses `Fixtures/ass-sync.mkv`: an original
+640x360, 24 fps black video with a green reference square and a separate white
+ASS vector square, both active for the first half of seconds 2 through 9.
+It logs overlay delivery against the engine clock. A screen recording must
+compare the two squares' actual painted transitions separately; the callback
+log is not proof of compositor timing or physical Apple TV/iPhone behavior.
 
 Authored ASS frames keep clearly separated upper and lower artwork in separate
 bitmap regions. The upper region stays fixed; only a lower region that intersects
@@ -2595,8 +2675,9 @@ the single control the pressed direction targets.
 
 `LiveChannelTransport.swift` is the expanded live player's chrome, assembled from
 the VOD transport's parts rather than drawn separately: the title block and
-`playerGlassButton` badges (Audio · Subtitles · Multiview, plus Go Live when
-time-shifted), `PlayerScrubTrackSurface` for the timeline, `PlayerTabButtonStyle`
+track controls (Audio · Subtitles · More, with Zoom and Multiview under More).
+The separate Jump to live action precedes them when time-shifted. The player uses
+`PlayerScrubTrackSurface` for the timeline, `PlayerTabButtonStyle`
 tabs, the shared `PlayerOptionsPanel` for track/style menus, and
 `PlayerOverVideoCardStyle` cards. The card parks by one cluster offset exactly as
 rules 2–3 above describe, with the same constants on tvOS. Track menus live in
