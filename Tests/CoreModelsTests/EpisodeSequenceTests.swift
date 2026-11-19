@@ -39,4 +39,28 @@ final class EpisodeSequenceTests: XCTestCase {
         let missing = MediaItem(id: "x", title: "x", kind: .episode)
         XCTAssertNil(EpisodeSequence.neighbors(of: missing, in: pool).next)
     }
+
+    func testUnairedNextEpisodeIsNotOffered() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        var future = ep("e3", s: 1, e: 3)
+        future.releaseDate = now.addingTimeInterval(86_400)
+        let pool = [ep("e1", s: 1, e: 1), ep("e2", s: 1, e: 2), future]
+        XCTAssertNil(EpisodeSequence.neighbors(of: pool[1], in: pool, now: now).next)
+    }
+
+    func testAiredAndUndatedNextEpisodesAreOffered() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        var aired = ep("e2", s: 1, e: 2)
+        aired.releaseDate = now.addingTimeInterval(-86_400)
+        let pool = [ep("e1", s: 1, e: 1), aired, ep("e3", s: 1, e: 3)]
+        XCTAssertEqual(EpisodeSequence.neighbors(of: pool[0], in: pool, now: now).next?.id, "e2")
+        XCTAssertEqual(EpisodeSequence.neighbors(of: pool[1], in: pool, now: now).next?.id, "e3")
+    }
+
+    func testSchedulePlaceholderNextEpisodeIsNotOffered() {
+        var placeholder = ep("e2", s: 1, e: 2)
+        placeholder.scheduledAirDate = Date().addingTimeInterval(86_400)
+        let pool = [ep("e1", s: 1, e: 1), placeholder]
+        XCTAssertNil(EpisodeSequence.neighbors(of: pool[0], in: pool).next)
+    }
 }

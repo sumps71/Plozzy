@@ -11,16 +11,22 @@ public enum EpisodeSequence {
     /// season finale rolls into the next season's premiere. Non-episode entries
     /// and the current item's duplicates are ignored. Returns `(nil, nil)` when
     /// `current` isn't found.
+    ///
+    /// `next` is the first following episode that has already aired: an episode
+    /// dated after `now` (a server's placeholder for an unreleased episode) is
+    /// skipped, so neither auto-advance nor the Up Next card offers something
+    /// that cannot be played yet.
     public static func neighbors(
         of current: MediaItem,
-        in pool: [MediaItem]
+        in pool: [MediaItem],
+        now: Date = Date()
     ) -> (previous: MediaItem?, next: MediaItem?) {
         let ordered = sorted(pool)
         guard let index = ordered.firstIndex(where: { $0.id == current.id }) else {
             return (nil, nil)
         }
         let previous = index > 0 ? ordered[index - 1] : nil
-        let next = index < ordered.count - 1 ? ordered[index + 1] : nil
+        let next = ordered[(index + 1)...].first { $0.hasAired(by: now) }
         return (previous, next)
     }
 
@@ -35,5 +41,16 @@ public enum EpisodeSequence {
             if le != re { return le < re }
             return lhs.id < rhs.id
         }
+    }
+}
+
+private extension MediaItem {
+    /// Whether this episode is released as of `now`. An undated episode counts
+    /// as aired; a schedule-derived placeholder or a release date in the future
+    /// does not.
+    func hasAired(by now: Date) -> Bool {
+        if scheduledAirDate != nil { return false }
+        guard let releaseDate else { return true }
+        return releaseDate <= now
     }
 }
