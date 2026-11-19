@@ -1078,8 +1078,13 @@ struct DetailHeroView: View, Equatable {
                     if !presentsEpisodeStill, let heroParentNavigationAction {
                         parentNavigationButton(action: heroParentNavigationAction)
                     }
-                    if showsMoreMenu {
-                        moreMenu()
+                    if let version = selectedVersionForMoreMenu {
+                        versionButton(version)
+                        if showsNonVersionMenuItems {
+                            moreMenu(focusBinding: nil)
+                        }
+                    } else if showsMoreMenu {
+                        moreMenu(focusBinding: .more)
                     }
                     }
                 }
@@ -1743,7 +1748,7 @@ struct DetailHeroView: View, Equatable {
     /// hero re-render rebuilds the Menu's content closure, which can produce a
     /// visible single-frame flash right after the user opens it.
     @ViewBuilder
-    private func moreMenu() -> some View {
+    private func moreMenu(focusBinding: HeroRowAction?) -> some View {
         PlaybackSourceMenuButton(
             sources: serverChoices,
             selectedSourceID: selectedSourceAccountID,
@@ -1778,10 +1783,51 @@ struct DetailHeroView: View, Equatable {
                 .frame(width: heroIconSize, height: heroIconSize)
         }
         .modifier(HeroActionButtonStyle(prominent: false, circular: true))
-        .focused($heroActionRowFocus, equals: .more)
+        .focused($heroActionRowFocus, equals: focusBinding)
         .overlay(alignment: .bottom) { heroHint(for: .more) }
         .accessibilityIdentifier("detail-hero-more")
         .accessibilityLabel("More actions")
+    }
+
+    /// A capsule naming the selected version that opens the version picker
+    /// directly, skipping the combined server/version menu. Server choice and
+    /// browse-files stay in the "…" menu beside it (see `showsNonVersionMenuItems`).
+    @ViewBuilder
+    private func versionButton(_ version: MediaVersion) -> some View {
+        Button {
+            cancelPendingPrimaryAction()
+            isVersionPickerPresented = true
+        } label: {
+            Group {
+                if let label = version.displayLabel {
+                    Text(verbatim: label)
+                } else {
+                    Text("Version")
+                }
+            }
+            .lineLimit(1)
+            .foregroundStyle(Color.primary)
+        }
+        .modifier(HeroActionButtonStyle(prominent: false, circular: false))
+        .focused($heroActionRowFocus, equals: .more)
+        .accessibilityIdentifier("detail-hero-version")
+        .accessibilityLabel("Version")
+        .accessibilityValue(version.displayLabel ?? "")
+    }
+
+    /// Whether the "…" menu still has content once the version button owns the
+    /// version choice: more than one server, or browse-files.
+    private var showsNonVersionMenuItems: Bool {
+        (serverChoices.count > 1 && onSelectSource != nil)
+            || heroMenuActions.contains(.browseFiles)
+    }
+
+    /// The version the hero's version button names: the effective selection
+    /// (first/recommended when none is chosen), shown only when the title has
+    /// more than one version to choose between.
+    private var selectedVersionForMoreMenu: MediaVersion? {
+        guard versions.count > 1, onSelectVersion != nil else { return nil }
+        return versions.first(where: { $0.id == selectedVersionID }) ?? versions.first
     }
 
     @ViewBuilder
