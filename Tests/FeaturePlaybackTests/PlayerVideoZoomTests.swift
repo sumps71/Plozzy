@@ -31,7 +31,7 @@ final class PlayerVideoZoomTests: XCTestCase {
         var saved: [PlayerVideoZoom] = []
         model.onUserChange = { saved.append($0) }
         model.restoreForPlayback(nil, defaultPreference: .onDemandDefault, supportsActivePicture: true)
-        XCTAssertEqual(model.settings.mode, .picture)
+        XCTAssertEqual(model.settings.mode, .fit)
         XCTAssertTrue(saved.isEmpty)
         model.settings.mode = .fit
         model.setCustomPercent(117)
@@ -42,7 +42,7 @@ final class PlayerVideoZoomTests: XCTestCase {
         model.restoreForPlayback(nil, defaultPreference: .init(mode: .stretch), supportsActivePicture: true)
         XCTAssertEqual(model.settings.mode, .stretch, "A new item uses the platform's selected default.")
         model.restoreForPlayback(nil, defaultPreference: .onDemandDefault, supportsActivePicture: true)
-        XCTAssertEqual(model.settings.mode, .picture, "A new title does not inherit Custom.")
+        XCTAssertEqual(model.settings.mode, .fit, "A new title does not inherit Custom.")
         XCTAssertEqual(saved.count, 2)
     }
 
@@ -57,6 +57,22 @@ final class PlayerVideoZoomTests: XCTestCase {
         XCTAssertEqual(model.settings.mode, .picture)
         model.restoreForPlayback(.init(mode: .fit), defaultPreference: .onDemandDefault, supportsActivePicture: true)
         XCTAssertEqual(model.settings.mode, .fit)
+    }
+
+    func testNormalDefaultDoesNotFollowDetectedPictureChanges() throws {
+        let model = PlayerVideoZoomModel()
+        model.restoreForPlayback(nil, defaultPreference: .onDemandDefault, supportsActivePicture: true)
+        let original = try XCTUnwrap(model.settings.videoRect(in: television, aspectRatio: 16 / 9))
+        for picture in [
+            CGRect(x: 0, y: 0, width: 1, height: 1),
+            CGRect(x: 0, y: 0.1, width: 1, height: 0.8),
+            CGRect(x: 0.05, y: 0.2, width: 0.8, height: 0.65)
+        ] {
+            let frame = try XCTUnwrap(model.settings.videoRect(
+                in: television, aspectRatio: 16 / 9, activePicture: picture
+            ))
+            assertRect(frame, equals: original)
+        }
     }
 
     func testPictureFitMaximizesSafeBoundsWithUniformScaleAndAsymmetricTranslation() throws {
@@ -144,11 +160,13 @@ final class PlayerVideoZoomTests: XCTestCase {
         let store = PlaybackSettingsStore(defaults: defaults)
         for platform in VideoZoomDefaults.Platform.allCases {
             let preferences = PlaybackSettingsModel(store: store)
+            preferences.settings.videoZoom[platform].mode = .picture
             let model = PlayerVideoZoomModel()
             var saved: [PlayerVideoZoom] = []
             model.onUserChange = { saved.append($0) }
             model.bindAutoCropFraming(to: preferences, platform: platform)
-            model.restoreForPlayback(nil, defaultPreference: .onDemandDefault, supportsActivePicture: true)
+            model.restoreForPlayback(nil, defaultPreference: preferences.settings.videoZoom[platform],
+                                     supportsActivePicture: true)
             XCTAssertTrue(saved.isEmpty)
             for fillsScreen in [false, true] {
                 model.setPinchZoom(fillsScreen: fillsScreen)
@@ -162,7 +180,7 @@ final class PlayerVideoZoomTests: XCTestCase {
                 for remembered: PlayerVideoZoom? in [
                     nil, .init(mode: .picture, pictureFitsInsideSafeArea: fillsScreen)
                 ] {
-                    nextMovie.restoreForPlayback(remembered, defaultPreference: .onDemandDefault,
+                    nextMovie.restoreForPlayback(remembered, defaultPreference: reopened.settings.videoZoom[platform],
                                                  supportsActivePicture: true)
                     XCTAssertEqual(nextMovie.settings.mode, .picture)
                     XCTAssertEqual(nextMovie.settings.pictureFitsInsideSafeArea, !fillsScreen,
@@ -512,14 +530,16 @@ final class PlayerVideoZoomTests: XCTestCase {
         var opened: [PlayerControls.PlaybackScreen] = []
         let actions = PlayerOptionsActions(setPlaybackSpeed: { model.playbackSpeed = $0 })
         let rows = PlaybackOptionsPane.rows(model: model, zoom: model.videoZoom, actions: actions) { opened.append($0) }
-        XCTAssertEqual(rows.map(\.slot), [PlaybackOptionsPane.zoomSlot, PlaybackOptionsPane.speedSlot])
+        XCTAssertEqual(rows.map(\.slot), [PlaybackOptionsPane.zoomSlot])
         guard case let .submenu(_, open) = rows[0].kind else {
             return XCTFail("Zoom must open a normal submenu.")
         }
         open()
         XCTAssertEqual(opened, [.zoom])
         XCTAssertEqual(model.videoZoom.settings.mode, .fit)
-        guard case let .number(_, changeSpeed) = rows[1].kind else {
+        let speedRows = PlaybackOptionsPane.rows(model: model, zoom: model.videoZoom, actions: actions,
+                                                 speedOnly: true, openScreen: { _ in })
+        guard case let .number(_, changeSpeed) = try XCTUnwrap(speedRows.first).kind else {
             return XCTFail("Speed must use the existing inline numeric row.")
         }
         changeSpeed(1)
@@ -548,11 +568,13 @@ final class PlayerVideoZoomTests: XCTestCase {
         XCTAssertEqual(model.videoZoom.settings.customPercent, 134)
         XCTAssertEqual(PlaybackOptionsPane.rows(
             model: model, zoom: model.videoZoom, actions: actions, openScreen: { _ in }
-        ).map(\.slot), [0, 2], "Custom zoom must never add a third parent row.")
+        ).map(\.slot), [0], "Custom zoom must never add another parent row.")
         let live = PlaybackOptionsPane.rows(
-            model: model, zoom: model.videoZoom, actions: actions, offersPlaybackSpeed: false, openScreen: { _ in }
+            model: model, zoom: model.videoZoom, actions: actions,
+            additionalRows: [.init(slot: PlaybackOptionsPane.multiviewSlot, title: "Multiview", kind: .action {})],
+            openScreen: { _ in }
         )
-        XCTAssertEqual(live.map(\.slot), [0])
+        XCTAssertEqual(live.map(\.slot), [PlaybackOptionsPane.multiviewSlot, PlaybackOptionsPane.zoomSlot])
     }
 
     func testCapabilityGatesAndSelectedSpeedFocus() {
@@ -563,8 +585,9 @@ final class PlayerVideoZoomTests: XCTestCase {
             for: .playback, subtitleScreen: .tracks, model: model
         ), .row(PlaybackOptionsPane.zoomSlot))
         model.engineCapabilities = [.playbackSpeed]
+        XCTAssertEqual(model.trackControlCategories, [.speed])
         XCTAssertEqual(PlayerOptionsPanel.preferredFocus(
-            for: .playback, subtitleScreen: .tracks, model: model
+            for: .speed, subtitleScreen: .tracks, model: model
         ), .row(PlaybackOptionsPane.speedSlot))
         model.videoZoom.settings.mode = .custom
         XCTAssertEqual(PlayerOptionsPanel.preferredFocus(
