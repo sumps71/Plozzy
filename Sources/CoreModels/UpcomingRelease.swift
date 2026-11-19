@@ -230,3 +230,30 @@ public enum UpcomingReleaseBuilder {
             }.prefix(max(0, limit)))
     }
 }
+
+/// Every Upcoming release that airs on one calendar day, shown as a single card.
+public struct UpcomingDateGroup: Identifiable, Equatable, Sendable {
+    public let day: Date
+    public let releases: [UpcomingRelease]
+
+    public var id: String { "upcoming-day|\(day.timeIntervalSince1970)" }
+
+    /// The release whose item stands in for the card: it carries navigation,
+    /// focus identity and, for a single-title day, the card's own artwork.
+    public var lead: UpcomingRelease { releases[0] }
+    public var isShared: Bool { releases.count > 1 }
+
+    /// Groups sorted releases by start of day, keeping their order within a day.
+    public static func groups(
+        _ releases: [UpcomingRelease], calendar: Calendar = .current
+    ) -> [UpcomingDateGroup] {
+        var order: [Date] = []
+        var byDay: [Date: [UpcomingRelease]] = [:]
+        for release in releases {
+            let day = calendar.startOfDay(for: release.date)
+            if byDay[day] == nil { order.append(day) }
+            byDay[day, default: []].append(release)
+        }
+        return order.sorted().map { UpcomingDateGroup(day: $0, releases: byDay[$0] ?? []) }
+    }
+}

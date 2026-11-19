@@ -39,6 +39,8 @@ struct FocusHeroRowReporter {
     let focusedItem: (MediaItem) -> Void
     let focusedLibrary: (AggregatedLibrary) -> Void
     let focusedLiveChannel: (HomeLiveTVChannel) -> Void
+    /// Focus settled on a date shared by several shows.
+    var focusedGroup: (UpcomingDateGroup) -> Void = { _ in }
 }
 
 /// Geometry and timing for ``FocusHeroHomeView``.
@@ -148,12 +150,14 @@ enum FocusHeroSubject: Equatable {
     case item(MediaItem)
     case library(AggregatedLibrary)
     case liveChannel(HomeLiveTVChannel)
+    case group(FocusHeroGroup)
 
     var id: String {
         switch self {
         case .item(let item): "item-\(item.stablePresentationID)"
         case .library(let library): "library-\(library.key)"
         case .liveChannel(let channel): "live-\(channel.route.channelID)"
+        case .group(let group): "group-\(group.id)"
         }
     }
 
@@ -802,6 +806,12 @@ private struct FocusHeroRowStack<RowContent: View>: View {
                 let changedRow = model.resolvedActiveRowID(in: rows) != row.id
                 model.activate(row, in: rows)
                 model.show(.liveChannel(channel), in: row, withRow: changedRow)
+            },
+            focusedGroup: { group in
+                hasEnteredContent = true
+                let changedRow = model.resolvedActiveRowID(in: rows) != row.id
+                model.activate(row, in: rows)
+                model.show(.group(FocusHeroGroup(group)), in: row, withRow: changedRow)
             }
         )
     }
@@ -1471,25 +1481,41 @@ private struct FocusHeroBackdropLayer: View {
         let topOverscan = reduceMotion ? 0
             : (showcaseMotion?.distance ?? 0) * HeroShowcaseScrollMotion.backdropTravelFraction
         if let subject = model.subject {
-            HomeHeroBackdrop(
-                references: references(for: subject),
-                asyncFallbackURL: subject.item.flatMap(HomeHeroArtwork.backdropFallback(for:)),
-                slideID: subject.id,
-                forward: model.movingForward,
-                width: width,
-                height: height,
-                topOverscan: topOverscan,
-                scrimTone: colorScheme == .dark ? .black : .white,
-                scrimOpacity: isFrontmost ? 1 : 0,
-                transition: .crossfade,
-                scrimStyle: .browse
-            )
+            heroBackdrop(for: subject, width: width, height: height, topOverscan: topOverscan)
             .allowsHitTesting(false)
             .heroArtworkSource(
                 id: subject.id,
                 isActive: isFrontmost
             )
         }
+    }
+
+    @ViewBuilder
+    private func heroBackdrop(
+        for subject: FocusHeroSubject, width: CGFloat, height: CGFloat, topOverscan: CGFloat
+    ) -> some View {
+        let backdrop = HomeHeroBackdrop(
+            references: references(for: subject),
+            asyncFallbackURL: subject.item.flatMap(HomeHeroArtwork.backdropFallback(for:)),
+            slideID: subject.id,
+            forward: model.movingForward,
+            width: width,
+            height: height,
+            topOverscan: topOverscan,
+            scrimTone: colorScheme == .dark ? .black : .white,
+            scrimOpacity: isFrontmost ? 1 : 0,
+            transition: .crossfade,
+            scrimStyle: .browse
+        )
+        Group {
+            if case .group(let group) = subject {
+                backdrop.customArtwork(FocusHeroGroupBackdrop(group: group))
+            } else {
+                backdrop
+            }
+        }
+        .allowsHitTesting(false)
+        .heroArtworkSource(id: subject.id, isActive: isFrontmost)
     }
 
     private func references(for subject: FocusHeroSubject) -> [ArtworkReference] {
@@ -1500,7 +1526,7 @@ private struct FocusHeroBackdropLayer: View {
             )
         case .library(let library):
             [library.library.imageURL].compactMap { $0 }.map(ArtworkReference.remote)
-        case .liveChannel:
+        case .liveChannel, .group:
             []
         }
     }
@@ -1728,6 +1754,8 @@ struct FocusHeroColumn: View {
         switch subject {
         case .item(let item):
             itemColumn(metadata.item(for: item))
+        case .group(let group):
+            FocusHeroGroupColumn(group: group, textScale: textScale)
         case .liveChannel(let channel):
             VStack(alignment: .leading, spacing: 12) {
                 Label("Live TV", systemImage: "antenna.radiowaves.left.and.right")

@@ -63,6 +63,10 @@ public struct PosterCardView: View {
     ///
     /// Callers distinguish localized copy from preformatted content with `Text`.
     private let statusCueText: Text?
+    /// Titles whose artwork tiles the card instead of the item's own picture. Used when one
+    /// card stands for several releases (an Upcoming date shared by multiple shows).
+    private let artworkMontage: [MediaItem]
+    private let upcomingBadge: UpcomingCardBadge?
     /// When `true`, selecting the card starts playback immediately (Continue
     /// Watching, landscape library rows) rather than opening a detail page. Such
     /// cards show the resume chip — play glyph + progress bar + time-remaining —
@@ -158,6 +162,8 @@ public struct PosterCardView: View {
         reservesSubtitleSpace: Bool = true,
         captionSubtitle: LocalizedStringResource? = nil,
         statusCue: Text? = nil,
+        artworkMontage: [MediaItem] = [],
+        upcomingBadge: UpcomingCardBadge? = nil,
         playsOnSelect: Bool = false,
         showsResumeChip: Bool = false,
         downloadState: MediaDownloadBadgeState? = nil,
@@ -180,6 +186,8 @@ public struct PosterCardView: View {
         self.reservesSubtitleSpace = reservesSubtitleSpace
         self.captionSubtitle = captionSubtitle
         self.statusCueText = statusCue
+        self.artworkMontage = artworkMontage
+        self.upcomingBadge = upcomingBadge
         self.playsOnSelect = playsOnSelect
         self.showsResumeChipOverride = showsResumeChip
         self.downloadState = downloadState
@@ -377,6 +385,8 @@ public struct PosterCardView: View {
 
     private var nativePosterTreatment: NativePosterImageTreatment {
         if usesProgressOnlyPortrait { return .original }
+        // The montage is drawn at the card's own shape; the extended look would mirror each tile's bottom edge.
+        if artworkMontage.count > 1 { return .original }
         if showsSeriesArtwork {
             return style == .poster ? .extendedPortrait(blurredReflection: !reduceTransparency) : .extended
         }
@@ -396,48 +406,34 @@ public struct PosterCardView: View {
 
     private var nativePosterCard: some View {
         VStack(spacing: metrics.nativePosterCaptionSpacing) {
-            FallbackAsyncImage(
-                references: nativeArtworkReady ? nativePosterReferences : [],
-                prefersPrimaryReference: preferredSeriesArtwork != nil || prefersLandscapeKeyArtReference,
-                maxAspectRatio: posterAspectGuard,
-                variant: artworkVariant,
-                previewVariant: style == .poster ? .posterPreview : nil,
-                artworkPolicy: cardArtworkPresentationPolicy,
-                asyncFallbackURL: nativeArtworkReady ? nativePosterFallback : nil,
-                onResolveReference: { reference in
-                    artworkAlreadyCarriesTitle = reference.map(titleBearingArtwork.contains) ?? false
-                    resolvedLogoArtworkIdentity = reference == nil ? nil : seriesSource.identity
-                },
-                // An artless library has empty references both before and after
-                // settling; readiness must still restart its metadata fallback.
-                pinIdentity: (usesLogoArtwork ? seriesSource.pinIdentity : artworkPolicy.pinIdentity(for: item))
-                    + (nativeUsesProtectedArtwork ? "|protected" : "")
-                    + (nativeArtworkReady ? "" : "|pending-textless"),
-                content: { _ in Color.clear },
-                placeholder: { Color.clear }
-            )
-            .resolvedBitmap { image, identity in
-                NativeTVPoster(
-                    image: image,
-                    artworkIdentity: identity,
-                    treatment: nativePosterTreatment,
-                    aspectRatio: borderlessAspectRatio,
-                    fallbackWidth: size.width,
-                    title: nativePosterTitle,
-                    subtitle: cardAccessibilityValue,
-                    overlay: nativePosterOverlay(hasArtwork: image != nil),
-                    indicators: hidesPlaybackStatus ? nil : .media(nativePlaybackIndicators.statusOnly),
-                    artworkBackground: NativePosterArtworkBackground(
-                        dimming: usesLogoArtwork && !suppressesSeriesLogo ? nativeArtworkDimming : 0,
-                        scrim: showsResumeChip ? resumeChipOverlay.artworkScrim
-                            : nativePlaybackIndicators.withoutStatus.artworkScrim
-                    ),
-                    focus: $isFocused,
-                    source: detailTransitionSource,
-                    action: selectCard
+            if artworkMontage.count > 1 {
+                MontageBitmapReader(items: artworkMontage, artworkPolicy: artworkPolicy, aspectRatio: borderlessAspectRatio) { image, identity in
+                    nativePosterControl(image: image, identity: identity)
+                }
+            } else {
+                FallbackAsyncImage(
+                    references: nativeArtworkReady ? nativePosterReferences : [],
+                    prefersPrimaryReference: preferredSeriesArtwork != nil || prefersLandscapeKeyArtReference,
+                    maxAspectRatio: posterAspectGuard,
+                    variant: artworkVariant,
+                    previewVariant: style == .poster ? .posterPreview : nil,
+                    artworkPolicy: cardArtworkPresentationPolicy,
+                    asyncFallbackURL: nativeArtworkReady ? nativePosterFallback : nil,
+                    onResolveReference: { reference in
+                        artworkAlreadyCarriesTitle = reference.map(titleBearingArtwork.contains) ?? false
+                        resolvedLogoArtworkIdentity = reference == nil ? nil : seriesSource.identity
+                    },
+                    // An artless library has empty references both before and after
+                    // settling; readiness must still restart its metadata fallback.
+                    pinIdentity: (usesLogoArtwork ? seriesSource.pinIdentity : artworkPolicy.pinIdentity(for: item))
+                        + (nativeUsesProtectedArtwork ? "|protected" : "")
+                        + (nativeArtworkReady ? "" : "|pending-textless"),
+                    content: { _ in Color.clear },
+                    placeholder: { Color.clear }
                 )
-                .focused($isFocused.focusState)
-                .frame(maxWidth: .infinity)
+                .resolvedBitmap { image, identity in
+                    nativePosterControl(image: image, identity: identity)
+                }
             }
             if showsCaption {
                 PosterFocusReader(focus: $isFocused) { focused in
@@ -451,6 +447,30 @@ public struct PosterCardView: View {
         }
         .padding(.horizontal, metrics.borderlessCardSideMargin)
         .task(id: textlessResolutionIdentity) { await prepareTextlessArtwork() }
+    }
+
+    private func nativePosterControl(image: UIImage?, identity: String?) -> some View {
+        NativeTVPoster(
+            image: image,
+            artworkIdentity: identity,
+            treatment: nativePosterTreatment,
+            aspectRatio: borderlessAspectRatio,
+            fallbackWidth: size.width,
+            title: nativePosterTitle,
+            subtitle: cardAccessibilityValue,
+            overlay: nativePosterOverlay(hasArtwork: image != nil),
+            indicators: hidesPlaybackStatus ? nil : .media(nativePlaybackIndicators.statusOnly),
+            artworkBackground: NativePosterArtworkBackground(
+                dimming: usesLogoArtwork && !suppressesSeriesLogo ? nativeArtworkDimming : 0,
+                scrim: showsResumeChip ? resumeChipOverlay.artworkScrim
+                    : nativePlaybackIndicators.withoutStatus.artworkScrim
+            ),
+            focus: $isFocused,
+            source: detailTransitionSource,
+            action: selectCard
+        )
+        .focused($isFocused.focusState)
+        .frame(maxWidth: .infinity)
     }
 
     private var nativeArtworkReady: Bool { !usesLogoArtwork || textlessAnswerReady }
@@ -1013,7 +1033,9 @@ public struct PosterCardView: View {
 
     @ViewBuilder
     private var resolvedArtwork: some View {
-        if PosterCardPresentation.usesFolderArtwork(for: item.kind) {
+        if artworkMontage.count > 1 {
+            UpcomingMontageArtwork(items: artworkMontage, artworkPolicy: artworkPolicy)
+        } else if PosterCardPresentation.usesFolderArtwork(for: item.kind) {
             folderArtwork
         } else if usesLogoArtwork {
             seriesArtwork
@@ -1418,11 +1440,48 @@ public struct PosterCardView: View {
         seriesSource.logoFallback()
     }
 
+    /// Date badge top leading, countdown top trailing, release-kind chip bottom leading.
+    private func upcomingOverlay(_ badge: UpcomingCardBadge, inset: CGFloat) -> some View {
+        let size = metrics.resumeChipFontSize
+        return ZStack {
+            UpcomingDateBadgeView(badge: badge, weekdaySize: size * 0.7, daySize: size * 1.45)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            if let statusCueText {
+                statusCueText
+                    .font(.system(size: size, weight: .bold))
+                    .foregroundStyle(.black)
+                    .lineLimit(1)
+                    .padding(.horizontal, metrics.cardStatusCueHorizontalPadding)
+                    .padding(.vertical, metrics.cardStatusCueVerticalPadding)
+                    .background(Color.orange, in: Capsule(style: .continuous))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
+            if let chip = badge.chip {
+                chip
+                    .font(.system(size: size, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(.horizontal, metrics.cardStatusCueHorizontalPadding)
+                    .padding(.vertical, metrics.cardStatusCueVerticalPadding)
+                    .background(.black.opacity(0.72), in: Capsule(style: .continuous))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            }
+        }
+        .padding(inset)
+        // A faint top scrim keeps the badge and pill legible over busy artwork.
+        .background(alignment: .top) {
+            LinearGradient(colors: [.black.opacity(0.5), .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: size * 5)
+        }
+    }
+
     // MARK: Progress
 
     @ViewBuilder
     private func statusCue(inset: CGFloat) -> some View {
-        if let statusCueText {
+        if let upcomingBadge {
+            upcomingOverlay(upcomingBadge, inset: inset)
+        } else if let statusCueText {
             let cueFontSize = statusCuePlacement == .topLeading
                 ? metrics.cardStatusCueFontSize : metrics.resumeChipFontSize
             let content = statusCueText

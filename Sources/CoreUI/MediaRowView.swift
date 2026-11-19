@@ -269,6 +269,14 @@ public struct MediaRowView: View {
     /// so callers need this seam rather than rebuilding the whole rail.
     private let statusCue: ((MediaItem) -> Text?)?
     private let statusCueDetail: ((MediaItem) -> String?)?
+    /// Extra titles whose artwork fills a card as a montage (an Upcoming date shared by
+    /// several shows). Empty or nil keeps the card's own artwork.
+    private let artworkMontage: ((MediaItem) -> [MediaItem])?
+    /// Date badge and release-kind chip drawn over an Upcoming card's artwork.
+    private let upcomingBadge: ((MediaItem) -> UpcomingCardBadge?)?
+    /// Focus has left the row (not merely moved between its cards). Debounced, since focus
+    /// blips through nothing while it travels between cards.
+    private let onFocusLeft: (() -> Void)?
     /// Cards retained by a stale Watchlist row after their removal was accepted.
     private let pendingRemovalIDs: Set<String>
     /// Stable lookup tables so focus/prefetch hot paths avoid repeated linear scans.
@@ -349,6 +357,9 @@ public struct MediaRowView: View {
         isExposureActive: Bool = true,
         statusCue: ((MediaItem) -> Text?)? = nil,
         statusCueDetail: ((MediaItem) -> String?)? = nil,
+        artworkMontage: ((MediaItem) -> [MediaItem])? = nil,
+        upcomingBadge: ((MediaItem) -> UpcomingCardBadge?)? = nil,
+        onFocusLeft: (() -> Void)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
         reservesLoadingFocus: Bool = false,
@@ -382,6 +393,9 @@ public struct MediaRowView: View {
             isExposureActive: isExposureActive,
             statusCue: statusCue,
             statusCueDetail: statusCueDetail,
+            artworkMontage: artworkMontage,
+            upcomingBadge: upcomingBadge,
+            onFocusLeft: onFocusLeft,
             pendingRemovalIDs: pendingRemovalIDs,
             loadingPlaceholderCount: loadingPlaceholderCount,
             reservesLoadingFocus: reservesLoadingFocus,
@@ -417,6 +431,9 @@ public struct MediaRowView: View {
         isExposureActive: Bool = true,
         statusCue: ((MediaItem) -> Text?)? = nil,
         statusCueDetail: ((MediaItem) -> String?)? = nil,
+        artworkMontage: ((MediaItem) -> [MediaItem])? = nil,
+        upcomingBadge: ((MediaItem) -> UpcomingCardBadge?)? = nil,
+        onFocusLeft: (() -> Void)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
         reservesLoadingFocus: Bool = false,
@@ -466,6 +483,9 @@ public struct MediaRowView: View {
         self.isExposureActive = isExposureActive
         self.statusCue = statusCue
         self.statusCueDetail = statusCueDetail
+        self.artworkMontage = artworkMontage
+        self.upcomingBadge = upcomingBadge
+        self.onFocusLeft = onFocusLeft
         self.pendingRemovalIDs = pendingRemovalIDs
         self.playsOnSelect = playsOnSelect
         self.showsResumeChip = showsResumeChip
@@ -1034,6 +1054,8 @@ public struct MediaRowView: View {
                     spoilerSettings: spoilerSettings,
                     showsSeriesArtwork: showsSeriesArtwork,
                     statusCue: combinedStatusCue(for: item),
+                    artworkMontage: artworkMontage?(item) ?? [],
+                    upcomingBadge: upcomingBadge?(item),
                     playsOnSelect: playsOnSelect,
                     showsResumeChip: showsResumeChip,
                     isPendingRemoval: pendingRemovalIDs.contains(
@@ -1053,6 +1075,8 @@ public struct MediaRowView: View {
                     spoilerSettings: spoilerSettings,
                     showsSeriesArtwork: showsSeriesArtwork,
                     statusCue: combinedStatusCue(for: item),
+                    artworkMontage: artworkMontage?(item) ?? [],
+                    upcomingBadge: upcomingBadge?(item),
                     playsOnSelect: playsOnSelect,
                     showsResumeChip: showsResumeChip,
                     isPendingRemoval: pendingRemovalIDs.contains(
@@ -1590,6 +1614,15 @@ public struct MediaRowView: View {
         activity.focusExitReset = nil
         if newValue == nil { scheduleResetAfterFocusExit(using: proxy) }
         #endif
+        activity.focusLeftTask?.cancel()
+        if newValue == nil, onFocusLeft != nil {
+            activity.focusLeftTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled, activity.focus?.wrappedValue == nil,
+                      !activity.browseCardHasFocus, !leadingBrowseFocused else { return }
+                onFocusLeft?()
+            }
+        }
         // A fast horizontal hold constantly blips focus to `nil` between cards (the
         // focused card is recycled out of the lazy stack for a frame). Ignore it
         // entirely: re-arming here is what used to disable every card mid-scroll and
@@ -1821,6 +1854,7 @@ private final class MediaRowActivity {
     /// The pending scroll-back after focus left the row, and whether a See all
     /// card (which the card focus doesn't track) currently holds focus.
     @ObservationIgnored var focusExitReset: Task<Void, Never>?
+    @ObservationIgnored var focusLeftTask: Task<Void, Never>?
     @ObservationIgnored var browseCardHasFocus = false
     /// A See all page is open over this row; focus returns to its card when it closes.
     @ObservationIgnored var browseReturnPending = false

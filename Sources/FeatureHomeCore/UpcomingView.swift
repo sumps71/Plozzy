@@ -652,8 +652,19 @@
         private let onFocusEntered: (() -> Void)?
         private let onFocusChange: ((MediaItem?) -> Void)?
         private let onCardFocused: ((MediaItem) -> Void)?
+        /// Reports a date shared by several shows, so the hero can present all of them at once.
+        /// Without it, the hero steps through the shows one at a time.
+        private let onGroupFocused: ((UpcomingDateGroup) -> Void)?
         @Environment(\.mediaItemNavigator) private var navigate
         @Environment(\.locale) private var locale
+        #if os(tvOS)
+            @State private var pickerGroup: UpcomingDateGroup?
+            /// Navigation waits for the picker to finish dismissing.
+            @State private var pendingPickedItem: MediaItem?
+            /// Rotates the hero through a shared date's shows while its card is focused.
+            @State private var heroCycle: Task<Void, Never>?
+            private static let heroCycleInterval: Duration = .seconds(3)
+        #endif
         #if os(iOS)
             @Environment(\.plozzCardStyle) private var cardStyle
             @Environment(\.mediaItemArtworkNavigator) private var navigateArtwork
@@ -667,6 +678,7 @@
             onFocusEntered: (() -> Void)? = nil,
             onFocusChange: ((MediaItem?) -> Void)? = nil,
             onCardFocused: ((MediaItem) -> Void)? = nil,
+            onGroupFocused: ((UpcomingDateGroup) -> Void)? = nil,
             onSeeAll: @escaping () -> Void
         ) {
             self.title = title
@@ -677,29 +689,53 @@
             self.onFocusEntered = onFocusEntered
             self.onFocusChange = onFocusChange
             self.onCardFocused = onCardFocused
+            self.onGroupFocused = onGroupFocused
         }
 
         public var body: some View {
             #if os(tvOS)
+                let groups = UpcomingDateGroup.groups(releases)
                 MediaRowView(
-                    title: title, items: releases.map(\.item), style: style,
+                    title: title, items: groups.map(\.lead.item), style: style,
                     showsSeriesArtwork: showsSeriesArtwork,
                     leadingInset: 0, onFocusEntered: onFocusEntered,
-                    onFocusChange: onFocusChange, onCardFocused: onCardFocused,
+                    onFocusChange: { item in
+                        heroCycle?.cancel()
+                        heroCycle = nil
+                        if let item, let group = group(for: item, in: groups), group.isShared {
+                            if let onGroupFocused {
+                                onGroupFocused(group)
+                            } else {
+                                onFocusChange?(item)
+                                startHeroCycle(for: group)
+                            }
+                        } else {
+                            onFocusChange?(item)
+                        }
+                    },
+                    onCardFocused: onCardFocused,
                     statusCue: { item in
-                        guard
-                            let release = releases.first(where: {
-                                $0.item.stablePresentationID == item.stablePresentationID
-                            })
-                        else { return nil }
-                        return statusCue(for: release)
+                        guard let group = group(for: item, in: groups) else { return nil }
+                        return countdownCue(for: group.lead)
                     },
-                    statusCueDetail: { item in
-                        releases.first(where: {
-                            $0.item.stablePresentationID == item.stablePresentationID
-                        })?.seasonEpisodeLabel
+                    artworkMontage: { item in
+                        guard let group = group(for: item, in: groups), group.isShared else { return [] }
+                        return group.releases.map(\.item)
                     },
-                    onSelect: { navigate?($0) }
+                    upcomingBadge: { item in
+                        guard let group = group(for: item, in: groups) else { return nil }
+                        return dateBadge(for: group)
+                    },
+                    onFocusLeft: { heroCycle?.cancel(); heroCycle = nil },
+                    onSelect: { item in
+                        if let group = group(for: item, in: groups), group.isShared {
+                            heroCycle?.cancel()
+                            heroCycle = nil
+                            pickerGroup = group
+                        } else {
+                            navigate?(item)
+                        }
+                    }
                 )
                 .browsingRow(onSeeAll)
                 .withoutLeadingBrowseCard()
@@ -710,6 +746,24 @@
                 // Upcoming titles aren't in the library, so their art is always online.
                 .transformEnvironment(\.plozzArtworkSettings) { $0.setOverride(.online, for: .continueWatching) }
                 .mediaItemActionContext(.upcoming)
+                .onDisappear { heroCycle?.cancel(); heroCycle = nil }
+                .fullScreenCover(item: $pickerGroup, onDismiss: {
+                    if let item = pendingPickedItem {
+                        pendingPickedItem = nil
+                        navigate?(item)
+                    }
+                }) { group in
+                    UpcomingDatePicker(group: group, locale: locale) { release in
+                        pendingPickedItem = release.item
+                        pickerGroup = nil
+                    }
+                    // Portrait posters, like a standard Home row, not Continue Watching art.
+                    .environment(\.plozzArtworkArea, .homeRows)
+                    // The picker's only job is telling shows apart, so captions stay on
+                    // even when the profile hides them from Home rows.
+                    .environment(\.plozzCardCaptionsHidden, false)
+                    .transformEnvironment(\.plozzArtworkSettings) { $0.setOverride(.online, for: .homeRows) }
+                }
             #elseif os(iOS)
                 PlozziOSHomeRailLayout { metrics in
                     PlozziOSMediaSection(
@@ -750,9 +804,65 @@
             Text(verbatim: Self.airCue(for: release.date, now: Date(), locale: locale))
         }
 
+        #if os(tvOS)
+            /// The hero already shows the group's first show; step through the rest, then repeat.
+            private func startHeroCycle(for group: UpcomingDateGroup) {
+                guard onFocusChange != nil else { return }
+                heroCycle = Task { @MainActor in
+                    var index = 0
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: Self.heroCycleInterval)
+                        guard !Task.isCancelled else { return }
+                        index = (index + 1) % group.releases.count
+                        onFocusChange?(group.releases[index].item)
+                    }
+                }
+            }
+
+            private func group(for item: MediaItem, in groups: [UpcomingDateGroup]) -> UpcomingDateGroup? {
+                groups.first { $0.lead.item.stablePresentationID == item.stablePresentationID }
+            }
+
+            /// "Today", "Tomorrow" or "In 5 days" for a release within two weeks; later dates
+            /// are carried by the date badge alone.
+            private func countdownCue(for release: UpcomingRelease) -> Text? {
+                let calendar = Calendar.current
+                let days = calendar.dateComponents(
+                    [.day], from: calendar.startOfDay(for: Date()), to: calendar.startOfDay(for: release.date)
+                ).day ?? -1
+                guard (0...14).contains(days) else { return nil }
+                return statusCue(for: release)
+            }
+
+            /// Weekday and day number, with a chip for the number of shows on a shared date or
+            /// the kind of a single release.
+            private func dateBadge(for group: UpcomingDateGroup) -> UpcomingCardBadge {
+                let chip: Text?
+                if group.isShared {
+                    chip = Text("\(group.releases.count) shows", comment: "Upcoming card chip: how many shows air on the same day. Number is a count and needs plural forms.")
+                } else {
+                    let lead = group.lead
+                    if lead.kind == .episode, lead.episodes.first?.episodeNumber == 1 {
+                        chip = Text("Premiere", comment: "Upcoming card chip for the first episode of a season.")
+                    } else if let label = lead.seasonEpisodeLabel {
+                        chip = Text(verbatim: label)
+                    } else if lead.item.kind == .movie {
+                        chip = Text("Movie", comment: "Upcoming card chip for a film release.")
+                    } else {
+                        chip = nil
+                    }
+                }
+                return UpcomingCardBadge(
+                    weekday: Text(group.day, format: Date.FormatStyle(locale: locale).weekday(.abbreviated)),
+                    day: Text(group.day, format: Date.FormatStyle(locale: locale).day()),
+                    chip: chip
+                )
+            }
+        #endif
+
         /// "Today", "Tomorrow", "In 5 days", or the formatted air date once it is
         /// more than two weeks away (or already past).
-        static func airCue(
+        public static func airCue(
             for airDate: Date, now: Date, locale: Locale, calendar: Calendar = .current
         ) -> String {
             let days = calendar.dateComponents(
@@ -769,6 +879,41 @@
             return formatter.localizedString(from: DateComponents(day: days))
         }
     }
+
+    #if os(tvOS)
+        /// Lists the shows airing on one Upcoming day so one can be opened.
+        private struct UpcomingDatePicker: View {
+            let group: UpcomingDateGroup
+            let locale: Locale
+            let onPick: (UpcomingRelease) -> Void
+
+            var body: some View {
+                VStack(spacing: 48) {
+                    Text(group.day.formatted(.dateTime.weekday(.wide).month(.wide).day().locale(locale)))
+                        .font(.title2.bold())
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 48) {
+                            ForEach(group.releases) { release in
+                                PosterCardView(
+                                    item: release.item, style: .poster,
+                                    captionSubtitle: release.posterSubtitle
+                                ) { onPick(release) }
+                                .frame(width: 280)
+                            }
+                        }
+                        .padding(.horizontal, 80)
+                        .padding(.vertical, 40)
+                    }
+                    .scrollClipDisabled()
+                    .defaultScrollAnchor(.center)
+                    .frame(height: 560)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Opaque backdrop: a system sheet's glass blurs the focused card's lift.
+                .background(Color.black.ignoresSafeArea())
+            }
+        }
+    #endif
 
     private struct UpcomingReleaseCard: View {
         let release: UpcomingRelease

@@ -1905,7 +1905,8 @@ public struct HomeView: View {
                     style: visibility.continueWatchingLayout.cardStyle,
                     showsSeriesArtwork: visibility.continueWatchingUsesSeriesArtwork,
                     onFocusEntered: reporter.entered, onFocusChange: onFocusChange,
-                    onCardFocused: reporter.cardFocused
+                    onCardFocused: reporter.cardFocused,
+                    onGroupFocused: reporter.focusedGroup
                 ) { onBrowse?() }
             } else if let issue = row.issue {
                 sectionStatusView(issue, browseItem: row.browseItem)

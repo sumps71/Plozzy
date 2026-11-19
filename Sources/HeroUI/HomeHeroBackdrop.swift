@@ -117,6 +117,16 @@ public struct HomeHeroBackdrop: View {
     var scrimOpacity: Double = 1
     var transition: Transition = .wipe
     var scrimStyle: ScrimStyle = .carousel
+    /// Replaces the single backdrop with caller-drawn artwork (a composite for several titles).
+    /// The scrim, fade and placement still apply.
+    var customArtwork: AnyView?
+
+    /// Draws `artwork` in place of the backdrop image, keeping this view's scrim and fade.
+    public func customArtwork<Artwork: View>(_ artwork: Artwork) -> Self {
+        var copy = self
+        copy.customArtwork = AnyView(artwork)
+        return copy
+    }
 
     public init(
         references: [ArtworkReference],
@@ -266,6 +276,15 @@ public struct HomeHeroBackdrop: View {
 
     @ViewBuilder
     private var backdropImage: some View {
+        if let customArtwork {
+            customArtwork.frame(width: width, height: height + topOverscan)
+        } else {
+            standardBackdropImage
+        }
+    }
+
+    @ViewBuilder
+    private var standardBackdropImage: some View {
         #if canImport(UIKit)
         let policy = artworkPolicy.forPlacement(artworkPlacement ?? artworkPolicy.placement)
         WipeImageView(
