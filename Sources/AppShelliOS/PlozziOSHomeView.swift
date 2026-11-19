@@ -774,7 +774,11 @@ struct PlozziOSHomeView: View {
                         )
                     case let .library(row):
                         if presentation.id == .global(.comingSoon) {
-                            UpcomingHomeRow(title: row.section.displayName, releases: viewModel.upcoming.homeReleases) {
+                            UpcomingHomeRow(
+                                title: row.section.displayName, releases: viewModel.upcoming.homeReleases,
+                                style: appModel.settings.homeVisibility.continueWatchingLayout.cardStyle,
+                                showsSeriesArtwork: appModel.settings.homeVisibility.continueWatchingUsesSeriesArtwork
+                            ) {
                                 showingUpcoming = true
                             }
                         } else {
@@ -3004,6 +3008,7 @@ struct PlozziOSHomeRowView: View {
                         viewModel.noteHomeNavigationInteraction
                 )
                 .environment(\.plozzArtworkArea, row.kind == .continueWatching ? .continueWatching : .homeRows)
+                .mediaItemActionContext(row.kind == .continueWatching ? .continueWatching : .none)
             }
         }
         .environment(\.mediaRowRefreshStatus, refreshStatus)

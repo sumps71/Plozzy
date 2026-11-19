@@ -33,9 +33,14 @@ public enum FastHeroTrailerResolver {
             }
             let trailers = (try? await provider.trailers(for: source.itemID)) ?? []
             guard !Task.isCancelled else { return nil }
-            guard let local = trailers.first(where: { !$0.isYouTubeTrailer }),
+            guard let local = trailers.first(where: \.isServerItemTrailer),
                   let request = try? await provider.playbackInfo(for: local.id)
             else {
+                // No local file: a direct remote URL (AIOMetadata / Trailer.io)
+                // is just as playable, with no provider lookup needed.
+                if let direct = await directSource(from: trailers, ownerItemID: item.id) {
+                    return direct
+                }
                 continue
             }
             guard !Task.isCancelled else { return nil }
@@ -60,6 +65,35 @@ public enum FastHeroTrailerResolver {
                     duration: duration
                 )
             }
+        }
+        return nil
+    }
+
+    /// Hero source for the first direct remote trailer in `trailers` whose
+    /// duration can be read and that loads into a player, trying each in server
+    /// order, or `nil` when there is none. A dead, expired or unplayable link —
+    /// including one whose duration reads fine but never becomes ready — falls
+    /// through to the next one instead of ending the search.
+    /// The URL carries no server credentials, so no auth resolution is needed.
+    public static func directSource(
+        from trailers: [MediaItem],
+        ownerItemID: String,
+        duration resolveDuration: (URL) async -> TimeInterval? = { await HeroTrailerController.resolvedDuration(of: $0) },
+        isPlayable: (URL) async -> Bool = { await HeroTrailerController.isPlayable(url: $0) }
+    ) async -> HeroTrailerSource? {
+        for direct in trailers where direct.isDirectTrailer {
+            guard !Task.isCancelled else { return nil }
+            guard let url = direct.directTrailerURL,
+                  let duration = await resolveDuration(url),
+                  !Task.isCancelled,
+                  await isPlayable(url),
+                  !Task.isCancelled else { continue }
+            return HeroTrailerSource(
+                ownerItemID: ownerItemID,
+                trailerItemID: direct.id,
+                url: url,
+                duration: duration
+            )
         }
         return nil
     }

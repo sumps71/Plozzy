@@ -37,6 +37,12 @@ public extension EnvironmentValues {
     }
 }
 
+public extension EnvironmentValues {
+    /// Home rows scroll back to their first card once focus has moved to another
+    /// row. Off outside Home and unless the profile turns it on.
+    @Entry var resetsMediaRowOnFocusExit: Bool = false
+}
+
 public struct MediaRowHeader: View {
     private let title: Text
     private let leadingInset: CGFloat
@@ -214,6 +220,7 @@ public struct MediaRowView: View {
     @Environment(\.plozzPinnedSidebarActive) private var pinnedSidebarActive
     #if os(tvOS)
     @Environment(\.mediaRowHeaderTrailingInset) private var pageTrailingSafeInset
+    @Environment(\.resetsMediaRowOnFocusExit) private var resetsOnFocusExit
     @State private var portraitViewportWidth: CGFloat = 0
     @Environment(\.mediaRowSizingViewportWidth) private var sizingViewportWidth
     @State private var trailingSafeInset: CGFloat = 0
@@ -261,6 +268,15 @@ public struct MediaRowView: View {
     /// marks sequels/spin-offs as "Continues"). The row owns card construction,
     /// so callers need this seam rather than rebuilding the whole rail.
     private let statusCue: ((MediaItem) -> Text?)?
+    private let statusCueDetail: ((MediaItem) -> String?)?
+    /// Extra titles whose artwork fills a card as a montage (an Upcoming date shared by
+    /// several shows). Empty or nil keeps the card's own artwork.
+    private let artworkMontage: ((MediaItem) -> [MediaItem])?
+    /// Date badge and release-kind chip drawn over an Upcoming card's artwork.
+    private let upcomingBadge: ((MediaItem) -> UpcomingCardBadge?)?
+    /// Focus has left the row (not merely moved between its cards). Debounced, since focus
+    /// blips through nothing while it travels between cards.
+    private let onFocusLeft: (() -> Void)?
     /// Cards retained by a stale Watchlist row after their removal was accepted.
     private let pendingRemovalIDs: Set<String>
     /// Stable lookup tables so focus/prefetch hot paths avoid repeated linear scans.
@@ -281,6 +297,11 @@ public struct MediaRowView: View {
     @State private var tracksLoadingFocus: Bool
     private var onBrowse: (() -> Void)?
     private var usesRowBrowsing = false
+    private var allowsLeadingBrowseCard = true
+    @State private var leadingCardRevealed = false
+    @State private var leadingBrowseFocused = false
+    /// Asks the first title to take focus; see ``returnToFirstTitle(using:)``.
+    @State private var leadingFocusRequest: UUID?
     private var onLoadMore: (@MainActor () async -> Void)?
 
     public func loadingMore(_ action: (@MainActor () async -> Void)?) -> Self {
@@ -294,6 +315,25 @@ public struct MediaRowView: View {
         copy.onBrowse = action
         copy.usesRowBrowsing = true
         return copy
+    }
+
+    /// A browsing row also leads with a See all card, kept just off-screen to the
+    /// left. Rows whose first card should be a title (Coming Soon) opt out.
+    public func withoutLeadingBrowseCard() -> Self {
+        var copy = self
+        copy.allowsLeadingBrowseCard = false
+        return copy
+    }
+
+    /// The See all card at the start of the row. tvOS only, and only once the row
+    /// has titles to put it ahead of.
+    private var showsLeadingBrowseCard: Bool {
+        #if os(tvOS)
+        return allowsLeadingBrowseCard && onBrowse != nil && loadingPlaceholderCount == 0
+            && !items.isEmpty && presentation != .episodeColumn
+        #else
+        return false
+        #endif
     }
 
     public init(
@@ -316,6 +356,10 @@ public struct MediaRowView: View {
         onItemExposed: ((MediaItem) -> Void)? = nil,
         isExposureActive: Bool = true,
         statusCue: ((MediaItem) -> Text?)? = nil,
+        statusCueDetail: ((MediaItem) -> String?)? = nil,
+        artworkMontage: ((MediaItem) -> [MediaItem])? = nil,
+        upcomingBadge: ((MediaItem) -> UpcomingCardBadge?)? = nil,
+        onFocusLeft: (() -> Void)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
         reservesLoadingFocus: Bool = false,
@@ -348,6 +392,10 @@ public struct MediaRowView: View {
             onItemExposed: onItemExposed,
             isExposureActive: isExposureActive,
             statusCue: statusCue,
+            statusCueDetail: statusCueDetail,
+            artworkMontage: artworkMontage,
+            upcomingBadge: upcomingBadge,
+            onFocusLeft: onFocusLeft,
             pendingRemovalIDs: pendingRemovalIDs,
             loadingPlaceholderCount: loadingPlaceholderCount,
             reservesLoadingFocus: reservesLoadingFocus,
@@ -382,6 +430,10 @@ public struct MediaRowView: View {
         onItemExposed: ((MediaItem) -> Void)? = nil,
         isExposureActive: Bool = true,
         statusCue: ((MediaItem) -> Text?)? = nil,
+        statusCueDetail: ((MediaItem) -> String?)? = nil,
+        artworkMontage: ((MediaItem) -> [MediaItem])? = nil,
+        upcomingBadge: ((MediaItem) -> UpcomingCardBadge?)? = nil,
+        onFocusLeft: (() -> Void)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
         reservesLoadingFocus: Bool = false,
@@ -430,6 +482,10 @@ public struct MediaRowView: View {
         self.onItemExposed = onItemExposed
         self.isExposureActive = isExposureActive
         self.statusCue = statusCue
+        self.statusCueDetail = statusCueDetail
+        self.artworkMontage = artworkMontage
+        self.upcomingBadge = upcomingBadge
+        self.onFocusLeft = onFocusLeft
         self.pendingRemovalIDs = pendingRemovalIDs
         self.playsOnSelect = playsOnSelect
         self.showsResumeChip = showsResumeChip
@@ -454,7 +510,7 @@ public struct MediaRowView: View {
     /// Whether each card needs an individual focus binding installed — required
     /// to drive initial/default focus and to report focus changes to the hero.
     private var tracksFocus: Bool {
-        tracksLoadingFocus || episodeEntry != nil || MediaRowFocusPolicy.observesFocus(
+        tracksLoadingFocus || episodeEntry != nil || showsLeadingBrowseCard || MediaRowFocusPolicy.observesFocus(
             initialFocusID: initialFocusID,
             defaultFocusID: defaultFocusID,
             hasOnFocusEntered: onFocusEntered != nil,
@@ -605,6 +661,49 @@ public struct MediaRowView: View {
                             metrics: layoutMetrics,
                             leadingInset: cardsLeadingInset, trailingInset: cardsTrailingInset
                         ) {
+                            #if os(tvOS)
+                            if showsLeadingBrowseCard, let onBrowse {
+                                MediaRowBrowseCard(
+                                    width: cardSlotWidth,
+                                    style: presentation == .poster ? .poster : .landscape,
+                                    showsSeriesArtwork: showsSeriesArtwork,
+                                    posters: Array(items.prefix(9)),
+                                    onFocus: {
+                                        activity.pendingReport?.cancel()
+                                        activity.pendingReport = nil
+                                        onFocusEntered?()
+                                        onFocusChange?(nil)
+                                    },
+                                    onFocusChange: { focused in
+                                        leadingBrowseFocused = focused
+                                        if focused { activity.browseReturnPending = false }
+                                        if !focused { scheduleResetAfterFocusExit(using: proxy) }
+                                        scheduleLeadingCardTuck(using: proxy)
+                                    },
+                                    action: {
+                                        // The system hands focus back to this card when the
+                                        // See all page closes; remember that so it can be redirected.
+                                        activity.returningFromLeadingBrowse = true
+                                        activity.browseReturnPending = true
+                                        activity.focusExitReset?.cancel()
+                                        onBrowse()
+                                    }
+                                )
+
+                                // At rest only its edge peeks out beside the first title;
+                                // "revealed" means scrolling has brought more of it into view.
+                                .onAppear {
+                                    // The card is rebuilt when Home reappears under the See all page.
+                                    if activity.returningFromLeadingBrowse {
+                                        activity.returningFromLeadingBrowse = false
+                                        returnToFirstTitle(using: proxy)
+                                    }
+                                }
+                                .onGeometryChange(for: Bool.self) { [leadingEdge = cardsLeadingInset] geometry in
+                                    geometry.frame(in: .scrollView(axis: .horizontal)).maxX > leadingEdge
+                                } action: { leadingCardRevealed = $0 }
+                            }
+                            #endif
                             ForEach(Self.presentationElements(
                                 items: items,
                                 loadingPlaceholderCount: max(
@@ -640,12 +739,27 @@ public struct MediaRowView: View {
                                     width: cardSlotWidth,
                                     style: presentation == .poster ? .poster : .landscape,
                                     showsSeriesArtwork: showsSeriesArtwork,
+                                    posters: Array(items.suffix(9)),
                                     onFocus: {
                                         activity.pendingReport?.cancel()
                                         activity.pendingReport = nil
                                         onFocusEntered?()
                                         onFocusChange?(nil)
-                                    }, action: onBrowse
+                                    },
+                                    onFocusChange: { focused in
+                                        activity.browseCardHasFocus = focused
+                                        if focused { activity.browseReturnPending = false }
+                                        // Card focus doesn't change when leaving from a See all
+                                        // card, so the row's own focus handler never sees this exit.
+                                        if !focused { scheduleResetAfterFocusExit(using: proxy) }
+                                    },
+                                    action: {
+                                        // The See all page covers Home; focus comes back to this
+                                        // card, so the row must not scroll away meanwhile.
+                                        activity.browseReturnPending = true
+                                        activity.focusExitReset?.cancel()
+                                        onBrowse()
+                                    }
                                 )
                             }
                             #endif
@@ -790,6 +904,7 @@ public struct MediaRowView: View {
                     }
                     .modifier(MediaRowFocusObserver(activity: activity) { newValue in
                         handleFocusChange(to: newValue, using: proxy)
+                        scheduleLeadingCardTuck(using: proxy)
                     })
                     .onChange(of: defaultFocusID) { _, newTarget in
                         // The supplied target changed (e.g. switching seasons). Drop
@@ -921,6 +1036,12 @@ public struct MediaRowView: View {
         #endif
     }
 
+    private func combinedStatusCue(for item: MediaItem) -> Text? {
+        guard let cue = statusCue?(item) else { return nil }
+        guard let detail = statusCueDetail?(item) else { return cue }
+        return cue + Text(verbatim: " · ") + Text(verbatim: detail)
+    }
+
     @ViewBuilder
     private func card(for item: MediaItem) -> some View {
         switch presentation {
@@ -932,12 +1053,16 @@ public struct MediaRowView: View {
                     artworkPolicy: artworkPolicy,
                     spoilerSettings: spoilerSettings,
                     showsSeriesArtwork: showsSeriesArtwork,
-                    statusCue: statusCue?(item),
+                    statusCue: combinedStatusCue(for: item),
+                    artworkMontage: artworkMontage?(item) ?? [],
+                    upcomingBadge: upcomingBadge?(item),
                     playsOnSelect: playsOnSelect,
                     showsResumeChip: showsResumeChip,
                     isPendingRemoval: pendingRemovalIDs.contains(
                         item.stablePresentationID
-                    )
+                    ),
+                    focusRequest: focusRequest(for: item),
+                    onFocusRequestHandled: { leadingFocusRequest = nil }
                 ) { onSelect(item) },
                 for: item
             )
@@ -949,12 +1074,16 @@ public struct MediaRowView: View {
                     artworkPolicy: artworkPolicy,
                     spoilerSettings: spoilerSettings,
                     showsSeriesArtwork: showsSeriesArtwork,
-                    statusCue: statusCue?(item),
+                    statusCue: combinedStatusCue(for: item),
+                    artworkMontage: artworkMontage?(item) ?? [],
+                    upcomingBadge: upcomingBadge?(item),
                     playsOnSelect: playsOnSelect,
                     showsResumeChip: showsResumeChip,
                     isPendingRemoval: pendingRemovalIDs.contains(
                         item.stablePresentationID
-                    )
+                    ),
+                    focusRequest: focusRequest(for: item),
+                    onFocusRequestHandled: { leadingFocusRequest = nil }
                 ) { onSelect(item) },
                 for: item
             )
@@ -1377,7 +1506,11 @@ public struct MediaRowView: View {
             DispatchQueue.main.async { activity.requestFocus(target) }
             return
         }
-        if let target = initialScrollID,
+        // A leading See all card is the row's first card, but the row opens on the
+        // first title with that card tucked off to the left.
+        let scrollTarget = initialScrollID
+            ?? (showsLeadingBrowseCard ? items.first?.stablePresentationID : nil)
+        if let target = scrollTarget,
            !activity.didApplyInitialFocus,
            itemIDSet.contains(target) {
             activity.didApplyInitialFocus = true
@@ -1403,6 +1536,70 @@ public struct MediaRowView: View {
         proxy.scrollTo(target, anchor: .leading)
     }
 
+    /// Back from the See all page: put the row at rest (first title leading, the card
+    /// tucked away) and focus that title. The system hands focus back to the card the
+    /// page was opened from a moment after the row reappears, so the request for the
+    /// title comes after that, and again if the card still has focus.
+    private func returnToFirstTitle(using proxy: ScrollViewProxy) {
+        guard let first = items.first?.stablePresentationID else { return }
+        activity.tuckTask?.cancel()
+        Task { @MainActor in
+            for delay in [60, 200, 200] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                proxy.scrollTo(first, anchor: .leading)
+            }
+            for delay in [150, 400] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard leadingBrowseFocused || delay == 150 else { return }
+                proxy.scrollTo(first, anchor: .leading)
+                leadingFocusRequest = UUID()
+            }
+        }
+    }
+
+    /// Scrolls the row back to its first title once focus has really left it.
+    ///
+    /// Focus reads as `nil` for a frame between cards during a fast horizontal
+    /// hold, so a reset only fires if it is still `nil` after a short settle.
+    /// Rows whose focus lives outside the card focus (See all, Live TV, loading
+    /// placeholders, an episode row, or a page covered by a detail screen) are
+    /// left alone: moving them would scroll the focused card out of view.
+    private func scheduleResetAfterFocusExit(using proxy: ScrollViewProxy) {
+        guard resetsOnFocusExit, episodeEntry == nil, liveChannels.isEmpty,
+              let first = items.first?.stablePresentationID else { return }
+        activity.focusExitReset = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled,
+                  activity.focus?.wrappedValue == nil,
+                  !activity.browseCardHasFocus, !leadingBrowseFocused, !activity.browseReturnPending,
+                  !isCovered, coveredFocusID == nil, !loadingCardFocused else { return }
+            withAnimation(.smooth(duration: 0.3)) { proxy.scrollTo(first, anchor: .leading) }
+        }
+    }
+
+    /// The pending focus request, for the row's first title only.
+    private func focusRequest(for item: MediaItem) -> UUID? {
+        guard showsLeadingBrowseCard, item.stablePresentationID == items.first?.stablePresentationID else {
+            return nil
+        }
+        return leadingFocusRequest
+    }
+
+    /// When focus leaves a row whose leading See all card has been scrolled into view,
+    /// slide the row back so the card tucks to the left again. Waits a beat and checks
+    /// again, because focus blips through nothing between cards while it moves.
+    private func scheduleLeadingCardTuck(using proxy: ScrollViewProxy) {
+        activity.tuckTask?.cancel()
+        guard showsLeadingBrowseCard, leadingCardRevealed, !leadingBrowseFocused,
+              let first = items.first?.stablePresentationID else { return }
+        activity.tuckTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, leadingCardRevealed, !leadingBrowseFocused,
+                  activity.focus?.wrappedValue == nil else { return }
+            withAnimation(.easeOut(duration: 0.35)) { proxy.scrollTo(first, anchor: .leading) }
+        }
+    }
+
     /// Responds to focus moving onto a card (`newValue` non-nil) or off the row
     /// (`nil`). When focus *enters* the row and a gate target is set, the first
     /// card tvOS picks (the geometrically-nearest one) is overridden by moving
@@ -1412,6 +1609,20 @@ public struct MediaRowView: View {
     /// untouched; leaving the row (debounced) re-arms entry targeting on the card
     /// you were last on.
     private func handleFocusChange(to newValue: String?, using proxy: ScrollViewProxy) {
+        #if os(tvOS)
+        activity.focusExitReset?.cancel()
+        activity.focusExitReset = nil
+        if newValue == nil { scheduleResetAfterFocusExit(using: proxy) }
+        #endif
+        activity.focusLeftTask?.cancel()
+        if newValue == nil, onFocusLeft != nil {
+            activity.focusLeftTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled, activity.focus?.wrappedValue == nil,
+                      !activity.browseCardHasFocus, !leadingBrowseFocused else { return }
+                onFocusLeft?()
+            }
+        }
         // A fast horizontal hold constantly blips focus to `nil` between cards (the
         // focused card is recycled out of the lazy stack for a frame). Ignore it
         // entirely: re-arming here is what used to disable every card mid-scroll and
@@ -1634,10 +1845,19 @@ private final class MediaRowActivity {
     // Only gated episode rows render these values. Ordinary Home rows report
     // focus without rebuilding every card and its context menu.
     var focusEngaged = false
+    @ObservationIgnored var tuckTask: Task<Void, Never>?
+    @ObservationIgnored var returningFromLeadingBrowse = false
     var lastFocusedID: String?
     var hasBrowsedSinceTargetChange = false
 
     @ObservationIgnored var didApplyInitialFocus = false
+    /// The pending scroll-back after focus left the row, and whether a See all
+    /// card (which the card focus doesn't track) currently holds focus.
+    @ObservationIgnored var focusExitReset: Task<Void, Never>?
+    @ObservationIgnored var focusLeftTask: Task<Void, Never>?
+    @ObservationIgnored var browseCardHasFocus = false
+    /// A See all page is open over this row; focus returns to its card when it closes.
+    @ObservationIgnored var browseReturnPending = false
     @ObservationIgnored var visibleIDs: Set<String> = []
     @ObservationIgnored var pendingReport: DispatchWorkItem?
     @ObservationIgnored var prefetchedIDs: Set<String> = []

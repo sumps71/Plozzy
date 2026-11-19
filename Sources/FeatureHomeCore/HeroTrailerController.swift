@@ -183,6 +183,43 @@ public final class HeroTrailerController {
         return seconds.isFinite && seconds > 0 ? seconds : nil
     }
 
+    /// Whether `url` actually becomes ready to play within `timeout`. Reading a
+    /// duration succeeds for some files that then never load into a player (for
+    /// example a very large source-quality mp4), so this loads the stream into a
+    /// throwaway, muted, never-started player and waits for it to report ready.
+    /// `false` on failure or timeout. Never touches the shared controller.
+    @MainActor
+    public static func isPlayable(url: URL, timeout: Duration = .seconds(8)) async -> Bool {
+        let item = AVPlayerItem(url: url)
+        let player = AVPlayer(playerItem: item)
+        player.isMuted = true
+        player.automaticallyWaitsToMinimizeStalling = true
+        defer { player.replaceCurrentItem(with: nil) }
+        return await withCheckedContinuation { continuation in
+            var finished = false
+            var observation: NSKeyValueObservation?
+            var timeoutTask: Task<Void, Never>?
+            func finish(_ playable: Bool) {
+                guard !finished else { return }
+                finished = true
+                observation?.invalidate()
+                timeoutTask?.cancel()
+                continuation.resume(returning: playable)
+            }
+            observation = item.observe(\.status, options: [.initial, .new]) { item, _ in
+                switch item.status {
+                case .readyToPlay: Task { @MainActor in finish(true) }
+                case .failed: Task { @MainActor in finish(false) }
+                default: break
+                }
+            }
+            timeoutTask = Task { @MainActor in
+                try? await Task.sleep(for: timeout)
+                finish(false)
+            }
+        }
+    }
+
     /// Whether this controller is already presenting `itemID` (so a hero→detail
     /// hand-off for the same title can keep playing rather than reload).
     public func isShowing(_ itemID: String) -> Bool {

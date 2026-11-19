@@ -73,6 +73,16 @@ public struct UpcomingRelease: Identifiable, Equatable, Codable, Sendable {
         return "New episode"
     }
 
+    /// Compact season/episode identity for an upcoming episode banner.
+    /// Absolute numbering stays unconverted because it has no reliable season.
+    public var seasonEpisodeLabel: String? {
+        guard kind == .episode,
+              let episode = episodes.first,
+              let season = episode.seasonNumber,
+              let number = episode.episodeNumber else { return nil }
+        return "S\(season) E\(number)"
+    }
+
     public var posterSubtitle: LocalizedStringResource? {
         guard kind == .episode, let season = episodes.first?.seasonNumber else { return subtitle }
         if episodes.count > 1 {
@@ -218,5 +228,32 @@ public enum UpcomingReleaseBuilder {
                 $0.date >= today && !hiddenTitles.contains($0.titleKey)
                     && seen.insert($0.titleKey).inserted
             }.prefix(max(0, limit)))
+    }
+}
+
+/// Every Upcoming release that airs on one calendar day, shown as a single card.
+public struct UpcomingDateGroup: Identifiable, Equatable, Sendable {
+    public let day: Date
+    public let releases: [UpcomingRelease]
+
+    public var id: String { "upcoming-day|\(day.timeIntervalSince1970)" }
+
+    /// The release whose item stands in for the card: it carries navigation,
+    /// focus identity and, for a single-title day, the card's own artwork.
+    public var lead: UpcomingRelease { releases[0] }
+    public var isShared: Bool { releases.count > 1 }
+
+    /// Groups sorted releases by start of day, keeping their order within a day.
+    public static func groups(
+        _ releases: [UpcomingRelease], calendar: Calendar = .current
+    ) -> [UpcomingDateGroup] {
+        var order: [Date] = []
+        var byDay: [Date: [UpcomingRelease]] = [:]
+        for release in releases {
+            let day = calendar.startOfDay(for: release.date)
+            if byDay[day] == nil { order.append(day) }
+            byDay[day, default: []].append(release)
+        }
+        return order.sorted().map { UpcomingDateGroup(day: $0, releases: byDay[$0] ?? []) }
     }
 }

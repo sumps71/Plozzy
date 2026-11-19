@@ -27,7 +27,21 @@ final class UpcomingEpisodeTests: XCTestCase {
         XCTAssertNil(release.episodes.first?.seasonNumber)
         XCTAssertNil(release.episodes.first?.episodeNumber)
         XCTAssertEqual(release.episodes.first?.absoluteEpisodeNumber, 1075)
+        XCTAssertNil(release.seasonEpisodeLabel)
         XCTAssertEqual(release.datePrecision, .dateAndTime)
+    }
+
+    func testReleaseBannerEpisodeLabelComesFromScheduleNotSeriesItem() throws {
+        let series = MediaItem(id: "show", title: "Show", kind: .series)
+        var episode = sample()
+        episode.seasonNumber = 2
+        episode.episodeNumber = 4
+        episode.absoluteEpisodeNumber = nil
+
+        let release = try XCTUnwrap(UpcomingReleaseBuilder.episodes([episode], for: series).first)
+
+        XCTAssertEqual(release.item.kind, .series)
+        XCTAssertEqual(release.seasonEpisodeLabel, "S2 E4")
     }
 
     func testMoviesShowOnlyTheirFirstRegionalDigitalRelease() {
