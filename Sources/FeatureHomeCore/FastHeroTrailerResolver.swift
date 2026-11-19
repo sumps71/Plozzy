@@ -69,23 +69,32 @@ public enum FastHeroTrailerResolver {
         return nil
     }
 
-    /// Hero source for the first direct remote trailer in `trailers`, or `nil`
-    /// when there is none or its duration can't be read (unreachable/unplayable).
+    /// Hero source for the first direct remote trailer in `trailers` whose
+    /// duration can be read and that loads into a player, trying each in server
+    /// order, or `nil` when there is none. A dead, expired or unplayable link —
+    /// including one whose duration reads fine but never becomes ready — falls
+    /// through to the next one instead of ending the search.
     /// The URL carries no server credentials, so no auth resolution is needed.
     public static func directSource(
         from trailers: [MediaItem],
         ownerItemID: String,
-        duration resolveDuration: (URL) async -> TimeInterval? = { await HeroTrailerController.resolvedDuration(of: $0) }
+        duration resolveDuration: (URL) async -> TimeInterval? = { await HeroTrailerController.resolvedDuration(of: $0) },
+        isPlayable: (URL) async -> Bool = { await HeroTrailerController.isPlayable(url: $0) }
     ) async -> HeroTrailerSource? {
-        guard let direct = trailers.first(where: \.isDirectTrailer),
-              let url = direct.directTrailerURL,
-              let duration = await resolveDuration(url),
-              !Task.isCancelled else { return nil }
-        return HeroTrailerSource(
-            ownerItemID: ownerItemID,
-            trailerItemID: direct.id,
-            url: url,
-            duration: duration
-        )
+        for direct in trailers where direct.isDirectTrailer {
+            guard !Task.isCancelled else { return nil }
+            guard let url = direct.directTrailerURL,
+                  let duration = await resolveDuration(url),
+                  !Task.isCancelled,
+                  await isPlayable(url),
+                  !Task.isCancelled else { continue }
+            return HeroTrailerSource(
+                ownerItemID: ownerItemID,
+                trailerItemID: direct.id,
+                url: url,
+                duration: duration
+            )
+        }
+        return nil
     }
 }
